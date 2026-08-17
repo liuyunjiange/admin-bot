@@ -1,0 +1,162 @@
+pipeline {
+  agent any
+
+  options {
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+    timestamps()
+    timeout(time: 30, unit: 'MINUTES')
+  }
+
+  parameters {
+    string(name: 'BRANCH', defaultValue: 'main', description: 'Git branch to build')
+  }
+
+  environment {
+    GIT_SSH_CREDENTIALS_ID = 'github-ssh-key'
+    REPO_SSH_URL = 'git@github.com:liuyunjiange/admin-bot.git'
+    REGISTRY = 'sinapis.top:29314'
+    HARBOR_PROJECT = 'invest-agent'
+    IMAGE_NAME = 'admin-bot'
+    HARBOR_CREDENTIALS_ID = 'harbor-robot-invest-agent'
+    PYTHON_BASE_IMAGE = 'python:3.12.10-slim'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        deleteDir()
+        retry(3) {
+          checkout([
+            $class: 'GitSCM',
+            branches: [[name: "*/${params.BRANCH}"]],
+            userRemoteConfigs: [[
+              url: "${env.REPO_SSH_URL}",
+              credentialsId: "${env.GIT_SSH_CREDENTIALS_ID}"
+            ]],
+            extensions: [[
+              $class: 'CloneOption',
+              shallow: false,
+              noTags: false,
+              timeout: 20
+            ]]
+          ])
+        }
+      }
+    }
+
+    stage('Resolve Image') {
+      steps {
+        script {
+          env.GIT_SHORT = sh(
+            returnStdout: true,
+            script: 'git rev-parse --short=8 HEAD'
+          ).trim()
+          env.VERSION = sh(
+            returnStdout: true,
+            script: 'git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0'
+          ).trim()
+          env.IMAGE_TAG = "admin-bot-prod-${env.VERSION}-${env.GIT_SHORT}-b${env.BUILD_NUMBER}"
+          env.IMAGE_REF = "${env.REGISTRY}/${env.HARBOR_PROJECT}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+          currentBuild.description = env.IMAGE_REF
+        }
+      }
+    }
+
+    stage('Validate Python Project') {
+      steps {
+        sh(label: 'Run Python checks in Python 3.12 container', script: '''#!/usr/bin/env bash
+set -Eeuo pipefail
+
+docker run --rm \
+  --volume "${WORKSPACE}:/workspace" \
+  --workdir /workspace \
+  "${PYTHON_BASE_IMAGE}" \
+  sh -eu -c '
+    python -m pip install --no-cache-dir -e ".[dev]"
+    python -m ruff check .
+    python -m pytest
+    python -m compileall -q src
+  '
+''')
+      }
+    }
+
+    stage('Build Image') {
+      steps {
+        retry(2) {
+          sh(label: 'Build admin-bot image', script: '''#!/usr/bin/env bash
+set -Eeuo pipefail
+
+docker version
+docker build \
+  --build-arg BASE_IMAGE="${PYTHON_BASE_IMAGE}" \
+  --tag "${IMAGE_REF}" \
+  .
+''')
+        }
+      }
+    }
+
+    stage('Smoke Test Image') {
+      steps {
+        sh(label: 'Verify admin-bot runtime image', script: '''#!/usr/bin/env bash
+set -Eeuo pipefail
+
+docker run --rm --entrypoint python "${IMAGE_REF}" -c '
+  import demo_account_bot
+  import lark_oapi
+  print("SMOKE_OK")
+' | grep -q SMOKE_OK
+''')
+      }
+    }
+
+    stage('Push Harbor') {
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: "${env.HARBOR_CREDENTIALS_ID}",
+          usernameVariable: 'HARBOR_USER',
+          passwordVariable: 'HARBOR_PASSWORD'
+        )]) {
+          sh(label: 'Push immutable admin-bot image', script: '''#!/usr/bin/env bash
+set -Eeuo pipefail
+
+cleanup() {
+  docker logout "${REGISTRY}" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+set +x
+printf '%s' "${HARBOR_PASSWORD}" \
+  | docker login "${REGISTRY}" --username "${HARBOR_USER}" --password-stdin
+set -x
+docker push "${IMAGE_REF}"
+''')
+        }
+      }
+    }
+
+    stage('Archive Image Info') {
+      steps {
+        writeFile(
+          file: 'image-info.properties',
+          text: "IMAGE_REF=${env.IMAGE_REF}\nIMAGE_TAG=${env.IMAGE_TAG}\n"
+        )
+        archiveArtifacts artifacts: 'image-info.properties', fingerprint: true
+      }
+    }
+  }
+
+  post {
+    always {
+      deleteDir()
+    }
+    success {
+      echo "Build success: ${env.IMAGE_REF}"
+    }
+    failure {
+      echo 'admin-bot production image build failed. Check the stage logs above.'
+    }
+  }
+}

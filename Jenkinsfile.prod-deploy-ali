@@ -1,0 +1,239 @@
+pipeline {
+  agent any
+
+  options {
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+    timestamps()
+    timeout(time: 20, unit: 'MINUTES')
+  }
+
+  parameters {
+    string(name: 'IMAGE_TAG', defaultValue: '', description: 'Immutable admin-bot image tag from the build Job')
+  }
+
+  environment {
+    REGISTRY = 'sinapis.top:29314'
+    HARBOR_PROJECT = 'invest-agent'
+    IMAGE_NAME = 'admin-bot'
+    HARBOR_CREDENTIALS_ID = 'harbor-robot-invest-agent'
+
+    ALI_SERVER = '47.105.60.63'
+    ALI_SSH_CREDENTIALS_ID = 'ali-inner-ssh-key'
+
+    BASE_DIR = '/opt/admin-bot'
+    CONTAINER_NAME = 'admin-bot-prod'
+    HEALTH_PORT = '8080'
+  }
+
+  stages {
+    stage('Resolve Image') {
+      steps {
+        script {
+          def imageTag = params.IMAGE_TAG?.trim()
+          if (!imageTag) {
+            error('IMAGE_TAG is required')
+          }
+          if (imageTag == 'latest') {
+            error('Do not deploy latest. Use an immutable tag produced by the build Job.')
+          }
+          if (!imageTag.startsWith('admin-bot-prod-')) {
+            error("IMAGE_TAG '${imageTag}' must start with 'admin-bot-prod-'")
+          }
+          if (!(imageTag ==~ /^admin-bot-prod-[A-Za-z0-9._-]+$/)) {
+            error('IMAGE_TAG contains unsupported characters')
+          }
+          env.IMAGE_TAG = imageTag
+          env.IMAGE_REF = "${env.REGISTRY}/${env.HARBOR_PROJECT}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+          currentBuild.description = "${env.CONTAINER_NAME} -> ${env.IMAGE_REF}"
+        }
+      }
+    }
+
+    stage('Prepare Deploy Script') {
+      steps {
+        writeFile file: 'admin-bot-deploy.sh', text: '''#!/usr/bin/env bash
+set -Eeuo pipefail
+
+: "${IMAGE_REF:?IMAGE_REF is required}"
+: "${CONTAINER_NAME:?CONTAINER_NAME is required}"
+: "${BASE_DIR:?BASE_DIR is required}"
+: "${HEALTH_PORT:?HEALTH_PORT is required}"
+
+STARTUP_TIMEOUT_SECONDS=180
+CHECK_INTERVAL_SECONDS=3
+
+if [ ! -f "${BASE_DIR}/.env" ]; then
+  echo "[admin-bot] missing ${BASE_DIR}/.env" >&2
+  exit 1
+fi
+
+docker pull "${IMAGE_REF}"
+docker image inspect "${IMAGE_REF}" >/dev/null
+
+OLD_IMAGE="$(docker inspect --format '{{.Config.Image}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
+
+start_container() {
+  local image_ref="$1"
+  docker run -dit \
+    --name "${CONTAINER_NAME}" \
+    --restart always \
+    --env-file "${BASE_DIR}/.env" \
+    -p "127.0.0.1:${HEALTH_PORT}:${HEALTH_PORT}" \
+    --log-opt max-size=10m \
+    --log-opt max-file=5 \
+    "${image_ref}" >/dev/null
+}
+
+wait_for_health() {
+  local deadline
+  local status
+  deadline=$(( $(date +%s) + STARTUP_TIMEOUT_SECONDS ))
+
+  while [ "$(date +%s)" -lt "${deadline}" ]; do
+    status="$(docker inspect --format '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null || echo missing)"
+    echo "[admin-bot] container status=${status}"
+
+    case "${status}" in
+      exited|dead|missing)
+        return 1
+        ;;
+    esac
+
+    if [ "${status}" = "running" ]; then
+      health_status="$(docker inspect --format '{{.State.Health.Status}}' "${CONTAINER_NAME}" 2>/dev/null || echo unavailable)"
+      echo "[admin-bot] container health=${health_status}"
+      if [ "${health_status}" = "healthy" ] \
+        && curl --fail --silent --show-error "http://127.0.0.1:${HEALTH_PORT}/healthz" >/dev/null; then
+        return 0
+      fi
+    fi
+
+    sleep "${CHECK_INTERVAL_SECONDS}"
+  done
+
+  return 1
+}
+
+rollback() {
+  echo "[admin-bot] deployment failed; recent logs:" >&2
+  docker logs --tail 200 "${CONTAINER_NAME}" >&2 || true
+  docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+
+  if [ -z "${OLD_IMAGE}" ]; then
+    echo "[admin-bot] no previous image available for rollback" >&2
+    return 0
+  fi
+
+  echo "[admin-bot] restoring previous image ${OLD_IMAGE}"
+  start_container "${OLD_IMAGE}"
+  if wait_for_health; then
+    echo "[admin-bot] rollback succeeded"
+    return 0
+  fi
+
+  echo "[admin-bot] previous image did not become healthy" >&2
+  docker logs --tail 200 "${CONTAINER_NAME}" >&2 || true
+  return 1
+}
+
+if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
+  echo "[admin-bot] stopping previous container"
+  if ! docker stop --time 30 "${CONTAINER_NAME}" >/dev/null; then
+    echo "[admin-bot] could not stop previous container; leaving it unchanged" >&2
+    exit 1
+  fi
+  if ! docker rm "${CONTAINER_NAME}" >/dev/null; then
+    rollback
+    exit 1
+  fi
+fi
+
+echo "[admin-bot] starting ${IMAGE_REF}"
+if ! start_container "${IMAGE_REF}"; then
+  rollback
+  exit 1
+fi
+
+if ! wait_for_health; then
+  rollback
+  exit 1
+fi
+
+echo "[admin-bot] deployment succeeded"
+docker ps \
+  --filter "name=^/${CONTAINER_NAME}$" \
+  --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+'''
+      }
+    }
+
+    stage('Deploy to Aliyun') {
+      steps {
+        withCredentials([
+          sshUserPrivateKey(
+            credentialsId: "${env.ALI_SSH_CREDENTIALS_ID}",
+            keyFileVariable: 'SSH_KEY',
+            usernameVariable: 'SSH_USER'
+          ),
+          usernamePassword(
+            credentialsId: "${env.HARBOR_CREDENTIALS_ID}",
+            usernameVariable: 'HARBOR_USER',
+            passwordVariable: 'HARBOR_PASSWORD'
+          )
+        ]) {
+          sh(label: 'Deploy admin-bot on Aliyun', script: '''#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SSH_TARGET="${SSH_USER}@${ALI_SERVER}"
+REMOTE_SCRIPT="/tmp/admin-bot-deploy-${BUILD_NUMBER}.sh"
+SSH_OPTIONS=(
+  -o BatchMode=yes
+  -o ConnectTimeout=15
+  -o StrictHostKeyChecking=no
+  -o UserKnownHostsFile=/dev/null
+  -i "${SSH_KEY}"
+)
+
+cleanup() {
+  ssh "${SSH_OPTIONS[@]}" "${SSH_TARGET}" \
+    "docker logout '${REGISTRY}' >/dev/null 2>&1 || true; rm -f '${REMOTE_SCRIPT}'" \
+    >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+scp "${SSH_OPTIONS[@]}" \
+  admin-bot-deploy.sh \
+  "${SSH_TARGET}:${REMOTE_SCRIPT}"
+
+set +x
+printf '%s' "${HARBOR_PASSWORD}" \
+  | ssh "${SSH_OPTIONS[@]}" "${SSH_TARGET}" \
+      "docker login '${REGISTRY}' --username '${HARBOR_USER}' --password-stdin"
+set -x
+
+ssh "${SSH_OPTIONS[@]}" "${SSH_TARGET}" \
+  "chmod 700 '${REMOTE_SCRIPT}' && \
+   IMAGE_REF='${IMAGE_REF}' \
+   CONTAINER_NAME='${CONTAINER_NAME}' \
+   BASE_DIR='${BASE_DIR}' \
+   HEALTH_PORT='${HEALTH_PORT}' \
+   bash '${REMOTE_SCRIPT}'"
+''')
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      deleteDir()
+    }
+    success {
+      echo "Deploy success: ${env.IMAGE_REF}"
+    }
+    failure {
+      echo 'admin-bot deployment failed. Check the stage logs above.'
+    }
+  }
+}

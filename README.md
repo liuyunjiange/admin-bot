@@ -79,3 +79,5 @@ python -m venv .venv
 .\.venv\Scripts\python -m pytest
 .\.venv\Scripts\python -m ruff check .
 ```
+
+Jenkins 构建、部署、健康检查和回滚流程见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。

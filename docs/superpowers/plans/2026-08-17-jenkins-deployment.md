@@ -211,6 +211,10 @@ Expected: every command exits 0.
 
 ## Final Verification
 
+## Execution Adjustment
+
+The static contract-test steps for Jenkinsfile text were intentionally omitted during implementation. Jenkinsfiles are deployment configuration, so source-text assertions would only detect formatting changes rather than pipeline behavior. The implementation keeps the existing Python test suite and validates the Jenkinsfiles through Jenkins Pipeline execution, image smoke testing, health checks, and the documented Feishu acceptance flow.
+
 - [ ] Run git diff main...HEAD --check and confirm no whitespace errors.
 - [ ] Run the full Python test, Ruff, and compile commands from Task 3.
 - [ ] Verify .env remains ignored with git check-ignore .env.
