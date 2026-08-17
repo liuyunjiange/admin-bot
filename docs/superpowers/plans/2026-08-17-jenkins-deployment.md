@@ -4,13 +4,13 @@
 
 **Goal:** Add the two Jenkins jobs and deployment runbook needed to build, publish, deploy, verify, and roll back the Admin Bot service.
 
-**Architecture:** The build job checks out the selected branch, validates the Python project in a transient Python 3.12 container, builds an immutable Docker image, and pushes it to the existing Alibaba Cloud ACR repository. The deploy job accepts only a generated immutable image tag, connects to the existing server over SSH, starts one admin-bot-prod container using the server-local .env, verifies health, and restores the previous image if verification fails.
+**Architecture:** The build job checks out the selected branch, validates the Python project in a transient Python 3.12 container, builds an immutable Docker image, and pushes it to the existing Alibaba Cloud ACR repository. The deploy job accepts only a generated immutable image tag, runs on the same Jenkins Agent as the target server, starts one admin-bot-prod container using the server-local .env, verifies health, and restores the previous image if verification fails.
 
 **Tech Stack:** Jenkins Declarative Pipeline, Docker, Alibaba Cloud ACR, SSH, Bash, Python 3.12, pytest, Ruff.
 
 ## Global Constraints
 
-- Reuse Jenkins credentials github-ssh-key, aliyun-acr-sinapis-platform, and ali-inner-ssh-key. Never write credential values to repository files or logs.
+- Reuse Jenkins credentials github-ssh-key and aliyun-acr-sinapis-platform. Never write credential values to repository files or logs.
 - Publish only under sinapis-registry-vpc.cn-qingdao.cr.aliyuncs.com/sinapis-platform/sinapis-bot.
 - Tags use admin-bot-prod-vX.Y.Z-<git-short>-b<build-number>. The deploy pipeline rejects latest.
 - Deploy one container named admin-bot-prod from /opt/admin-bot.
@@ -90,7 +90,7 @@ Expected: PASS.
     git add Jenkinsfile.prod-build-ali tests/test_jenkins_pipelines.py
     git commit -m "ci: add admin bot image build pipeline"
 
-### Task 2: Add the deployment-pipeline contract test and SSH deployment Job
+### Task 2: Add the deployment-pipeline contract test and local deployment Job
 
 **Files:**
 
@@ -99,7 +99,7 @@ Expected: PASS.
 
 **Interfaces:**
 
-- Consumes: IMAGE_TAG, Alibaba Cloud ACR credential aliyun-acr-sinapis-platform, SSH credential ali-inner-ssh-key, and server-local /opt/admin-bot/.env.
+- Consumes: IMAGE_TAG, Alibaba Cloud ACR credential aliyun-acr-sinapis-platform, Docker access, and server-local /opt/admin-bot/.env.
 - Produces: one running admin-bot-prod container using the selected immutable image, or restores the previous image before returning failure.
 
 - [ ] **Step 1: Extend the contract test with deploy requirements**
@@ -111,7 +111,7 @@ Expected: PASS.
         assert "if (!imageTag)" in pipeline
         assert "if (imageTag == 'latest')" in pipeline
         assert "admin-bot-prod-" in pipeline
-        assert "ALI_SSH_CREDENTIALS_ID = 'ali-inner-ssh-key'" in pipeline
+        assert "REGISTRY_CREDENTIALS_ID = 'aliyun-acr-sinapis-platform'" in pipeline
         assert 'BASE_DIR = "/opt/admin-bot"' in pipeline
         assert 'CONTAINER_NAME = "admin-bot-prod"' in pipeline
         assert 'test -f "${BASE_DIR}/.env"' in pipeline
@@ -129,9 +129,9 @@ Expected: FileNotFoundError for Jenkinsfile.prod-deploy-ali.
 
 - [ ] **Step 3: Implement Jenkinsfile.prod-deploy-ali**
 
-Create a Declarative Pipeline with disableConcurrentBuilds(), skipDefaultCheckout(true), timestamps(), and a 20-minute timeout. Require IMAGE_TAG. Fail for an empty tag, latest, or a tag not beginning with admin-bot-prod-.
+Create a Declarative Pipeline with disableConcurrentBuilds(), skipDefaultCheckout(true), timestamps(), and a 20-minute timeout. Require IMAGE_TAG. Fail for an empty tag, latest, or a tag not beginning with admin-bot-prod-. The deployment Job runs on the same Jenkins Agent as the target server and does not use SSH.
 
-Set BASE_DIR to /opt/admin-bot and CONTAINER_NAME to admin-bot-prod. The temporary remote deployment script must:
+Set BASE_DIR to /opt/admin-bot and CONTAINER_NAME to admin-bot-prod. The temporary local deployment script must:
 
     test -f "${BASE_DIR}/.env"
     docker pull "${IMAGE_REF}"
@@ -143,7 +143,7 @@ Start a replacement using exactly:
 
 Poll Docker health for at most 180 seconds. It passes only when docker inspect reports healthy and curl --fail --silent --show-error http://127.0.0.1:8080/healthz succeeds.
 
-When startup or verification fails, remove the new container. If OLD_IMAGE is nonempty, start it with the same docker run parameters, wait for it to become healthy, then exit nonzero. Always remove the remote script and log out from Alibaba Cloud ACR after the SSH deployment stage.
+When startup or verification fails, remove the new container. If OLD_IMAGE is nonempty, start it with the same docker run parameters, wait for it to become healthy, then exit nonzero. Always log out from Alibaba Cloud ACR after the local deployment stage.
 
 - [ ] **Step 4: Run the focused test and verify it passes**
 

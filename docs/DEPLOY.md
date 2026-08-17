@@ -18,9 +18,10 @@ Jenkins 使用以下既有凭据：
 
 - github-ssh-key：检出 Git 仓库。
 - aliyun-acr-sinapis-platform：推送和拉取阿里云 ACR 镜像。
-- ali-inner-ssh-key：连接现有部署服务器。
 
 凭据值不写入代码、Jenkinsfile、构建产物或日志。
+
+Jenkins 构建 Agent 与部署服务器为同一台机器，部署 Job 在本机直接执行 Docker 部署，不需要额外的 SSH 凭据。
 
 ## 部署机一次性准备
 
@@ -55,7 +56,7 @@ Jenkins 使用以下既有凭据：
       demo-account:
         service-token-sha256: "Token 原文的 SHA-256 值"
 
-ADMIN_API_BASE_URL 必须是容器可以访问的模型平台后端内网地址，不能填写本地开发环境的 127.0.0.1。Jenkins 和部署机需要能访问阿里云 ACR，部署机还需要能访问飞书和模型平台后端。Jenkins 凭据 aliyun-acr-sinapis-platform 需要具备 sinapis-platform/sinapis-bot 的推送和拉取权限。
+ADMIN_API_BASE_URL 必须是容器可以访问的模型平台后端内网地址，不能填写本地开发环境的 127.0.0.1。Jenkins Agent 和部署机需要能访问阿里云 ACR，部署机还需要能访问飞书和模型平台后端。Jenkins 凭据 aliyun-acr-sinapis-platform 需要具备 sinapis-platform/sinapis-bot 的推送和拉取权限。Jenkins 用户需要具备 Docker 权限，并能够读取 `/opt/admin-bot/.env`。
 
 ## 创建 Jenkins Job
 

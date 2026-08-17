@@ -8,7 +8,7 @@
 
 ## 采用方案
 
-复用现有 Jenkins、阿里云 ACR 与 SSH 凭据，采用两个独立 Job。
+复用现有 Jenkins 与阿里云 ACR 凭据，采用两个独立 Job。Jenkins 构建 Agent 与部署服务器为同一台机器，部署 Job 直接在本机执行。
 
 | 项目 | 固定约定 |
 | --- | --- |
@@ -40,8 +40,7 @@
 文件名为 `Jenkinsfile.prod-deploy-ali`。Job 强制要求传入 `IMAGE_TAG`；空值、`latest` 或不以 `admin-bot-prod-` 开头的标签直接失败。
 
 1. 组合得到目标镜像地址，并显示镜像引用，不显示任何密钥。
-2. 使用既有 SSH 凭据 `ali-inner-ssh-key` 连接现有部署服务器。
-3. 使用既有阿里云 ACR 凭据登录服务器 Docker，拉取目标镜像。
+2. 使用既有阿里云 ACR 凭据登录本机 Docker，拉取目标镜像。
 4. 校验 `/opt/admin-bot/.env` 存在；该文件由运维一次性手工创建并保留在部署机，Jenkins 不上传、不读取、不归档。
 5. 记录当前 `admin-bot-prod` 容器所用镜像为回滚目标。
 6. 停止并删除旧容器，使用 `--env-file /opt/admin-bot/.env`、`--restart always` 与 `-p 127.0.0.1:8080:8080` 启动目标镜像。
@@ -63,7 +62,7 @@
 
 `.env` 文件权限设为 `600`。`ADMIN_API_BASE_URL` 必须为容器能够访问的后端内网地址或内部域名，不能使用开发机专用的 `host.docker.internal`。
 
-Jenkins 和部署机需要具备到阿里云 ACR 的网络连通性；部署机还需要具备到飞书和模型平台后端的网络连通性。Bot 通过出站 WebSocket 与飞书通信，无需公网入站回调或 Nginx。
+Jenkins Agent 和部署机需要具备到阿里云 ACR 的网络连通性；部署机还需要具备到飞书和模型平台后端的网络连通性。Jenkins 用户需要具备 Docker 权限并能读取 `/opt/admin-bot/.env`。Bot 通过出站 WebSocket 与飞书通信，无需公网入站回调或 Nginx。
 
 构建 Agent 还需要能够拉取 Python 基础镜像并安装 Python 依赖；若不能访问公网，应使用企业镜像与 Python 包镜像源。
 
