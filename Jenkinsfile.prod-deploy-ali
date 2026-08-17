@@ -18,9 +18,6 @@ pipeline {
     IMAGE_NAME = 'sinapis-bot'
     REGISTRY_CREDENTIALS_ID = 'aliyun-acr-sinapis-platform'
 
-    ALI_SERVER = '47.105.60.63'
-    ALI_SSH_CREDENTIALS_ID = 'ali-inner-ssh-key'
-
     BASE_DIR = '/opt/admin-bot'
     CONTAINER_NAME = 'admin-bot-prod'
     HEALTH_PORT = '8080'
@@ -170,54 +167,30 @@ docker ps \
 
     stage('Deploy to Aliyun') {
       steps {
-        withCredentials([
-          sshUserPrivateKey(
-            credentialsId: "${env.ALI_SSH_CREDENTIALS_ID}",
-            keyFileVariable: 'SSH_KEY',
-            usernameVariable: 'SSH_USER'
-          ),
-          usernamePassword(
+        withCredentials([usernamePassword(
             credentialsId: "${env.REGISTRY_CREDENTIALS_ID}",
             usernameVariable: 'ACR_USER',
             passwordVariable: 'ACR_PASSWORD'
-          )
-        ]) {
-          sh(label: 'Deploy admin-bot on Aliyun', script: '''#!/usr/bin/env bash
+        )]) {
+          sh(label: 'Deploy admin-bot locally', script: '''#!/usr/bin/env bash
 set -Eeuo pipefail
 
-SSH_TARGET="${SSH_USER}@${ALI_SERVER}"
-REMOTE_SCRIPT="/tmp/admin-bot-deploy-${BUILD_NUMBER}.sh"
-SSH_OPTIONS=(
-  -o BatchMode=yes
-  -o ConnectTimeout=15
-  -o StrictHostKeyChecking=accept-new
-  -i "${SSH_KEY}"
-)
-
 cleanup() {
-  ssh "${SSH_OPTIONS[@]}" "${SSH_TARGET}" \
-    "docker logout '${REGISTRY}' >/dev/null 2>&1 || true; rm -f '${REMOTE_SCRIPT}'" \
-    >/dev/null 2>&1 || true
+  docker logout "${REGISTRY}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-scp "${SSH_OPTIONS[@]}" \
-  admin-bot-deploy.sh \
-  "${SSH_TARGET}:${REMOTE_SCRIPT}"
-
 set +x
 printf '%s' "${ACR_PASSWORD}" \
-  | ssh "${SSH_OPTIONS[@]}" "${SSH_TARGET}" \
-      "docker login '${REGISTRY}' --username '${ACR_USER}' --password-stdin"
+  | docker login "${REGISTRY}" --username "${ACR_USER}" --password-stdin
 set -x
 
-ssh "${SSH_OPTIONS[@]}" "${SSH_TARGET}" \
-  "chmod 700 '${REMOTE_SCRIPT}' && \
-   IMAGE_REF='${IMAGE_REF}' \
-   CONTAINER_NAME='${CONTAINER_NAME}' \
-   BASE_DIR='${BASE_DIR}' \
-   HEALTH_PORT='${HEALTH_PORT}' \
-   bash '${REMOTE_SCRIPT}'"
+chmod 700 admin-bot-deploy.sh
+IMAGE_REF="${IMAGE_REF}" \
+CONTAINER_NAME="${CONTAINER_NAME}" \
+BASE_DIR="${BASE_DIR}" \
+HEALTH_PORT="${HEALTH_PORT}" \
+bash admin-bot-deploy.sh
 ''')
         }
       }
