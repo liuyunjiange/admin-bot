@@ -13,10 +13,10 @@ pipeline {
   }
 
   environment {
-    REGISTRY = 'sinapis.top:29314'
-    HARBOR_PROJECT = 'invest-agent'
-    IMAGE_NAME = 'admin-bot'
-    HARBOR_CREDENTIALS_ID = 'harbor-robot-invest-agent'
+    REGISTRY = 'sinapis-registry-vpc.cn-qingdao.cr.aliyuncs.com'
+    REGISTRY_NAMESPACE = 'sinapis-platform'
+    IMAGE_NAME = 'sinapis-bot'
+    REGISTRY_CREDENTIALS_ID = 'aliyun-acr-sinapis-platform'
 
     ALI_SERVER = '47.105.60.63'
     ALI_SSH_CREDENTIALS_ID = 'ali-inner-ssh-key'
@@ -44,7 +44,7 @@ pipeline {
             error('IMAGE_TAG contains unsupported characters')
           }
           env.IMAGE_TAG = imageTag
-          env.IMAGE_REF = "${env.REGISTRY}/${env.HARBOR_PROJECT}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+          env.IMAGE_REF = "${env.REGISTRY}/${env.REGISTRY_NAMESPACE}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
           currentBuild.description = "${env.CONTAINER_NAME} -> ${env.IMAGE_REF}"
         }
       }
@@ -177,9 +177,9 @@ docker ps \
             usernameVariable: 'SSH_USER'
           ),
           usernamePassword(
-            credentialsId: "${env.HARBOR_CREDENTIALS_ID}",
-            usernameVariable: 'HARBOR_USER',
-            passwordVariable: 'HARBOR_PASSWORD'
+            credentialsId: "${env.REGISTRY_CREDENTIALS_ID}",
+            usernameVariable: 'ACR_USER',
+            passwordVariable: 'ACR_PASSWORD'
           )
         ]) {
           sh(label: 'Deploy admin-bot on Aliyun', script: '''#!/usr/bin/env bash
@@ -190,8 +190,7 @@ REMOTE_SCRIPT="/tmp/admin-bot-deploy-${BUILD_NUMBER}.sh"
 SSH_OPTIONS=(
   -o BatchMode=yes
   -o ConnectTimeout=15
-  -o StrictHostKeyChecking=no
-  -o UserKnownHostsFile=/dev/null
+  -o StrictHostKeyChecking=accept-new
   -i "${SSH_KEY}"
 )
 
@@ -207,9 +206,9 @@ scp "${SSH_OPTIONS[@]}" \
   "${SSH_TARGET}:${REMOTE_SCRIPT}"
 
 set +x
-printf '%s' "${HARBOR_PASSWORD}" \
+printf '%s' "${ACR_PASSWORD}" \
   | ssh "${SSH_OPTIONS[@]}" "${SSH_TARGET}" \
-      "docker login '${REGISTRY}' --username '${HARBOR_USER}' --password-stdin"
+      "docker login '${REGISTRY}' --username '${ACR_USER}' --password-stdin"
 set -x
 
 ssh "${SSH_OPTIONS[@]}" "${SSH_TARGET}" \

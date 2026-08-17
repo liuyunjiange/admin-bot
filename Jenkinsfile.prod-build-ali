@@ -14,11 +14,11 @@ pipeline {
 
   environment {
     GIT_SSH_CREDENTIALS_ID = 'github-ssh-key'
-    REPO_SSH_URL = 'git@github.com:liuyunjiange/admin-bot.git'
-    REGISTRY = 'sinapis.top:29314'
-    HARBOR_PROJECT = 'invest-agent'
-    IMAGE_NAME = 'admin-bot'
-    HARBOR_CREDENTIALS_ID = 'harbor-robot-invest-agent'
+    REPO_SSH_URL = 'git@github.com:SinapisAI/admin-bot.git'
+    REGISTRY = 'sinapis-registry-vpc.cn-qingdao.cr.aliyuncs.com'
+    REGISTRY_NAMESPACE = 'sinapis-platform'
+    IMAGE_NAME = 'sinapis-bot'
+    REGISTRY_CREDENTIALS_ID = 'aliyun-acr-sinapis-platform'
     PYTHON_BASE_IMAGE = 'python:3.12.10-slim'
   }
 
@@ -57,7 +57,7 @@ pipeline {
             script: 'git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0'
           ).trim()
           env.IMAGE_TAG = "admin-bot-prod-${env.VERSION}-${env.GIT_SHORT}-b${env.BUILD_NUMBER}"
-          env.IMAGE_REF = "${env.REGISTRY}/${env.HARBOR_PROJECT}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+          env.IMAGE_REF = "${env.REGISTRY}/${env.REGISTRY_NAMESPACE}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
           currentBuild.description = env.IMAGE_REF
         }
       }
@@ -112,12 +112,12 @@ docker run --rm --entrypoint python "${IMAGE_REF}" -c '
       }
     }
 
-    stage('Push Harbor') {
+    stage('Push Alibaba Cloud ACR') {
       steps {
         withCredentials([usernamePassword(
-          credentialsId: "${env.HARBOR_CREDENTIALS_ID}",
-          usernameVariable: 'HARBOR_USER',
-          passwordVariable: 'HARBOR_PASSWORD'
+          credentialsId: "${env.REGISTRY_CREDENTIALS_ID}",
+          usernameVariable: 'ACR_USER',
+          passwordVariable: 'ACR_PASSWORD'
         )]) {
           sh(label: 'Push immutable admin-bot image', script: '''#!/usr/bin/env bash
 set -Eeuo pipefail
@@ -128,8 +128,8 @@ cleanup() {
 trap cleanup EXIT
 
 set +x
-printf '%s' "${HARBOR_PASSWORD}" \
-  | docker login "${REGISTRY}" --username "${HARBOR_USER}" --password-stdin
+printf '%s' "${ACR_PASSWORD}" \
+  | docker login "${REGISTRY}" --username "${ACR_USER}" --password-stdin
 set -x
 docker push "${IMAGE_REF}"
 ''')

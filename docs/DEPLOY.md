@@ -2,13 +2,13 @@
 
 本服务通过两个 Jenkins Job 发布，不在部署机拉取 Git 代码：
 
-1. 构建 Job：检出代码、执行 Python 检查、构建不可变 Docker 镜像并推送 Harbor。
+1. 构建 Job：检出代码、执行 Python 检查、构建不可变 Docker 镜像并推送阿里云 ACR。
 2. 部署 Job：按镜像标签登录部署机、更新单个容器、执行健康检查，失败时恢复旧镜像。
 
 ## 固定约定
 
-- Git 仓库：git@github.com:liuyunjiange/admin-bot.git
-- Harbor 镜像：sinapis.top:29314/invest-agent/admin-bot
+- Git 仓库：git@github.com:SinapisAI/admin-bot.git
+- 阿里云 ACR 镜像：sinapis-registry-vpc.cn-qingdao.cr.aliyuncs.com/sinapis-platform/sinapis-bot
 - 部署目录：/opt/admin-bot
 - 容器名称：admin-bot-prod
 - 健康端口：127.0.0.1:8080
@@ -17,7 +17,7 @@
 Jenkins 使用以下既有凭据：
 
 - github-ssh-key：检出 Git 仓库。
-- harbor-robot-invest-agent：推送和拉取 Harbor 镜像。
+- aliyun-acr-sinapis-platform：推送和拉取阿里云 ACR 镜像。
 - ali-inner-ssh-key：连接现有部署服务器。
 
 凭据值不写入代码、Jenkinsfile、构建产物或日志。
@@ -55,7 +55,7 @@ Jenkins 使用以下既有凭据：
       demo-account:
         service-token-sha256: "Token 原文的 SHA-256 值"
 
-ADMIN_API_BASE_URL 必须是容器可以访问的模型平台后端内网地址，不能填写本地开发环境的 127.0.0.1。部署机需要能访问 Harbor、飞书和模型平台后端。
+ADMIN_API_BASE_URL 必须是容器可以访问的模型平台后端内网地址，不能填写本地开发环境的 127.0.0.1。Jenkins 和部署机需要能访问阿里云 ACR，部署机还需要能访问飞书和模型平台后端。Jenkins 凭据 aliyun-acr-sinapis-platform 需要具备 sinapis-platform/sinapis-bot 的推送和拉取权限。
 
 ## 创建 Jenkins Job
 

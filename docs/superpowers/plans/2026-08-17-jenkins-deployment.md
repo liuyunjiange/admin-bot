@@ -4,14 +4,14 @@
 
 **Goal:** Add the two Jenkins jobs and deployment runbook needed to build, publish, deploy, verify, and roll back the Admin Bot service.
 
-**Architecture:** The build job checks out the selected branch, validates the Python project in a transient Python 3.12 container, builds an immutable Docker image, and pushes it to the existing invest-agent Harbor project. The deploy job accepts only a generated immutable image tag, connects to the existing server over SSH, starts one admin-bot-prod container using the server-local .env, verifies health, and restores the previous image if verification fails.
+**Architecture:** The build job checks out the selected branch, validates the Python project in a transient Python 3.12 container, builds an immutable Docker image, and pushes it to the existing Alibaba Cloud ACR repository. The deploy job accepts only a generated immutable image tag, connects to the existing server over SSH, starts one admin-bot-prod container using the server-local .env, verifies health, and restores the previous image if verification fails.
 
-**Tech Stack:** Jenkins Declarative Pipeline, Docker, Harbor, SSH, Bash, Python 3.12, pytest, Ruff.
+**Tech Stack:** Jenkins Declarative Pipeline, Docker, Alibaba Cloud ACR, SSH, Bash, Python 3.12, pytest, Ruff.
 
 ## Global Constraints
 
-- Reuse Jenkins credentials github-ssh-key, harbor-robot-invest-agent, and ali-inner-ssh-key. Never write credential values to repository files or logs.
-- Publish only under sinapis.top:29314/invest-agent/admin-bot.
+- Reuse Jenkins credentials github-ssh-key, aliyun-acr-sinapis-platform, and ali-inner-ssh-key. Never write credential values to repository files or logs.
+- Publish only under sinapis-registry-vpc.cn-qingdao.cr.aliyuncs.com/sinapis-platform/sinapis-bot.
 - Tags use admin-bot-prod-vX.Y.Z-<git-short>-b<build-number>. The deploy pipeline rejects latest.
 - Deploy one container named admin-bot-prod from /opt/admin-bot.
 - Jenkins only checks for /opt/admin-bot/.env and passes it with --env-file. It never uploads, reads, archives, or prints it.
@@ -29,8 +29,8 @@
 
 **Interfaces:**
 
-- Consumes: Git SSH credential github-ssh-key and Harbor credential harbor-robot-invest-agent.
-- Produces: an image under sinapis.top:29314/invest-agent/admin-bot and archived image-info.properties containing IMAGE_REF and IMAGE_TAG.
+- Consumes: Git SSH credential github-ssh-key and Alibaba Cloud ACR credential aliyun-acr-sinapis-platform.
+- Produces: an image under sinapis-registry-vpc.cn-qingdao.cr.aliyuncs.com/sinapis-platform/sinapis-bot and archived image-info.properties containing IMAGE_REF and IMAGE_TAG.
 
 - [ ] **Step 1: Write the failing build-pipeline contract test**
 
@@ -43,8 +43,8 @@
 
         assert "string(name: 'BRANCH', defaultValue: 'main'" in pipeline
         assert "GIT_SSH_CREDENTIALS_ID = 'github-ssh-key'" in pipeline
-        assert "HARBOR_PROJECT = 'invest-agent'" in pipeline
-        assert "IMAGE_NAME = 'admin-bot'" in pipeline
+        assert "REGISTRY_NAMESPACE = 'sinapis-platform'" in pipeline
+        assert "IMAGE_NAME = 'sinapis-bot'" in pipeline
         assert 'env.IMAGE_TAG = "admin-bot-prod-${env.VERSION}-${env.GIT_SHORT}-b${env.BUILD_NUMBER}"' in pipeline
         assert 'pip install -e ".[dev]"' in pipeline
         assert "python -m pytest" in pipeline
@@ -62,10 +62,10 @@ Expected: FileNotFoundError for Jenkinsfile.prod-build-ali.
 
 Create a Declarative Pipeline with disableConcurrentBuilds(), skipDefaultCheckout(true), timestamps(), and a 30-minute timeout. Add a BRANCH string parameter defaulting to main.
 
-Use GitSCM with URL git@github.com:liuyunjiange/admin-bot.git and the github-ssh-key credential. Resolve GIT_SHORT with git rev-parse --short=8 HEAD. Resolve VERSION with git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0. Set:
+Use GitSCM with URL git@github.com:SinapisAI/admin-bot.git and the github-ssh-key credential. Resolve GIT_SHORT with git rev-parse --short=8 HEAD. Resolve VERSION with git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0. Set:
 
     env.IMAGE_TAG = "admin-bot-prod-${env.VERSION}-${env.GIT_SHORT}-b${env.BUILD_NUMBER}"
-    env.IMAGE_REF = "${env.REGISTRY}/${env.HARBOR_PROJECT}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+    env.IMAGE_REF = "${env.REGISTRY}/${env.REGISTRY_NAMESPACE}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
 
 Run this validation in a python:3.12.10-slim container with the workspace mounted at /workspace:
 
@@ -74,7 +74,7 @@ Run this validation in a python:3.12.10-slim container with the workspace mounte
     python -m pytest
     python -m compileall -q src
 
-Build Docker image ${IMAGE_REF}. Log in to Harbor with --password-stdin while shell tracing is disabled, push the image, and always log out. Archive image-info.properties containing only:
+Build Docker image ${IMAGE_REF}. Log in to Alibaba Cloud ACR with --password-stdin while shell tracing is disabled, push the image, and always log out. Archive image-info.properties containing only:
 
     IMAGE_REF=<resolved immutable image reference>
     IMAGE_TAG=<resolved immutable image tag>
@@ -99,7 +99,7 @@ Expected: PASS.
 
 **Interfaces:**
 
-- Consumes: IMAGE_TAG, Harbor credential harbor-robot-invest-agent, SSH credential ali-inner-ssh-key, and server-local /opt/admin-bot/.env.
+- Consumes: IMAGE_TAG, Alibaba Cloud ACR credential aliyun-acr-sinapis-platform, SSH credential ali-inner-ssh-key, and server-local /opt/admin-bot/.env.
 - Produces: one running admin-bot-prod container using the selected immutable image, or restores the previous image before returning failure.
 
 - [ ] **Step 1: Extend the contract test with deploy requirements**
@@ -143,7 +143,7 @@ Start a replacement using exactly:
 
 Poll Docker health for at most 180 seconds. It passes only when docker inspect reports healthy and curl --fail --silent --show-error http://127.0.0.1:8080/healthz succeeds.
 
-When startup or verification fails, remove the new container. If OLD_IMAGE is nonempty, start it with the same docker run parameters, wait for it to become healthy, then exit nonzero. Always remove the remote script and log out from Harbor after the SSH deployment stage.
+When startup or verification fails, remove the new container. If OLD_IMAGE is nonempty, start it with the same docker run parameters, wait for it to become healthy, then exit nonzero. Always remove the remote script and log out from Alibaba Cloud ACR after the SSH deployment stage.
 
 - [ ] **Step 4: Run the focused test and verify it passes**
 

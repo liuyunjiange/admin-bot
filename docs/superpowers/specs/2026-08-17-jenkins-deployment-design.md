@@ -8,13 +8,13 @@
 
 ## 采用方案
 
-复用现有 Jenkins、Harbor 与 SSH 凭据，采用两个独立 Job。
+复用现有 Jenkins、阿里云 ACR 与 SSH 凭据，采用两个独立 Job。
 
 | 项目 | 固定约定 |
 | --- | --- |
-| Git 仓库 | `git@github.com:liuyunjiange/admin-bot.git` |
+| Git 仓库 | `git@github.com:SinapisAI/admin-bot.git` |
 | 构建分支 | `main`，可由构建参数覆盖 |
-| Harbor 仓库 | `sinapis.top:29314/invest-agent/admin-bot` |
+| 阿里云 ACR 仓库 | `sinapis-registry-vpc.cn-qingdao.cr.aliyuncs.com/sinapis-platform/sinapis-bot` |
 | 镜像标签 | `admin-bot-prod-vX.Y.Z-<git-short>-b<build-number>` |
 | 部署目录 | `/opt/admin-bot` |
 | 容器名 | `admin-bot-prod` |
@@ -30,7 +30,7 @@
 2. 解析当前提交短 SHA 与最近 Git tag；没有 tag 时使用 `v0.0.0`。
 3. 使用 Python 3.12 Docker 临时容器执行 `pip install -e ".[dev]"`、Ruff、pytest 和 Python 编译检查，不依赖 Jenkins Agent 预装 Python 环境。
 4. 构建 Docker 镜像，并使用不可变标签标记。
-5. 使用既有 Harbor 凭据 `harbor-robot-invest-agent` 登录，推送镜像。
+5. 使用既有阿里云 ACR 凭据 `aliyun-acr-sinapis-platform` 登录，推送镜像。
 6. 归档仅包含 `IMAGE_REF` 和 `IMAGE_TAG` 的 `image-info.properties`。
 
 构建失败时不触发部署，也不产生可被部署 Job 使用的镜像标签。
@@ -41,7 +41,7 @@
 
 1. 组合得到目标镜像地址，并显示镜像引用，不显示任何密钥。
 2. 使用既有 SSH 凭据 `ali-inner-ssh-key` 连接现有部署服务器。
-3. 使用既有 Harbor 凭据登录服务器 Docker，拉取目标镜像。
+3. 使用既有阿里云 ACR 凭据登录服务器 Docker，拉取目标镜像。
 4. 校验 `/opt/admin-bot/.env` 存在；该文件由运维一次性手工创建并保留在部署机，Jenkins 不上传、不读取、不归档。
 5. 记录当前 `admin-bot-prod` 容器所用镜像为回滚目标。
 6. 停止并删除旧容器，使用 `--env-file /opt/admin-bot/.env`、`--restart always` 与 `-p 127.0.0.1:8080:8080` 启动目标镜像。
@@ -63,7 +63,7 @@
 
 `.env` 文件权限设为 `600`。`ADMIN_API_BASE_URL` 必须为容器能够访问的后端内网地址或内部域名，不能使用开发机专用的 `host.docker.internal`。
 
-部署机需要具备到 Harbor、飞书和模型平台后端的网络连通性。Bot 通过出站 WebSocket 与飞书通信，无需公网入站回调或 Nginx。
+Jenkins 和部署机需要具备到阿里云 ACR 的网络连通性；部署机还需要具备到飞书和模型平台后端的网络连通性。Bot 通过出站 WebSocket 与飞书通信，无需公网入站回调或 Nginx。
 
 构建 Agent 还需要能够拉取 Python 基础镜像并安装 Python 依赖；若不能访问公网，应使用企业镜像与 Python 包镜像源。
 
