@@ -1,0 +1,18 @@
+services:
+  demo-account-bot:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12.10-slim}
+    container_name: demo-account-bot
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${HEALTH_PORT:-8080}:${HEALTH_PORT:-8080}"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
